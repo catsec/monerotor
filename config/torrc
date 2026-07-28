@@ -1,17 +1,32 @@
 # monerotor Tor config.
-# Two independent hidden services (separate onions), SOCKS on loopback for
-# torsocks-wrapped monerod. Tor runs as user 'tor' (the only user allowed to
-# egress by the kill-switch). Onion keys live on the persistent /data/tor volume.
+# ONE hidden service (the wallet RPC), SOCKS on loopback for torsocks-wrapped
+# monerod. Tor runs as user 'tor' (the only user allowed to egress by the
+# kill-switch). Onion keys live on the persistent /data/tor volume.
+# There is deliberately NO management onion: admin is local `docker exec` only.
 
 DataDirectory /data/tor/data
 SocksPort 127.0.0.1:9050
+
+# Traffic-shape defense is tor's job, not ours. Both are ON by default in
+# modern tor; asserted here so a future edit can't quietly weaken them:
+#   ConnectionPadding        - netflow padding on the guard link, so the ISP
+#                              can't read connection start/stop timing
+#   ReducedConnectionPadding - the low-bandwidth (weaker) mode: keep it OFF
+# We deliberately do NOT generate application-level decoy traffic (fetching
+# random websites on a timer). A bare periodic homepage GET with no
+# subresources is a distinctive pattern — it fingerprints the node rather
+# than hiding it — it adds a parse-external-input attack surface, and it
+# spends volunteer exit bandwidth for no gain. See THREAT_MODEL.md.
+ConnectionPadding 1
+ReducedConnectionPadding 0
+
+# Control socket for the vanguards addon (guard-discovery defense for the
+# onion service). Unix socket on tmpfs, reachable only by user 'tor'.
+ControlSocket /run/tor/control
+CookieAuthentication 1
+CookieAuthFile /run/tor/control.authcookie
 
 # --- Monero restricted RPC (point your wallet at this onion) ---
 HiddenServiceDir /data/tor/monero-rpc
 HiddenServiceVersion 3
 HiddenServicePort 18081 127.0.0.1:18081
-
-# --- SSH management (a DIFFERENT onion) ---
-HiddenServiceDir /data/tor/ssh
-HiddenServiceVersion 3
-HiddenServicePort 22 127.0.0.1:2222

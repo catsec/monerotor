@@ -1,15 +1,19 @@
-# monerotor — one hardened container. No published ports; reachable only via Tor.
+# monerotor — one hardened container. No published ports; the wallet RPC is
+# reachable only as an onion service. There is NO remote management surface:
+# admin happens locally via docker.
 #
 #   1. configure:  docker compose run --rm -it setup
 #   2. run:        docker compose up -d
-#   3. manage:     docker compose run --rm -it setup mtor <backup|restore|set …>
-#                  (live status/onion over the SSH onion: ssh -p 22 admin@<onion>)
+#   3. manage:     docker exec monerotor mtor <status|onion|logs|set …>
+#      (status needs the node's loopback, so it runs in the node container)
+#
+# No backup/restore exists, on purpose: the identity is disposable. To start
+# fresh: down, delete the data folders, re-run setup (new onion + password).
 
 x-volumes: &vols
   - ${MONERO_DIR:-./data/monero}:/data/monero
   - ${TOR_DIR:-./data/tor}:/data/tor
   - ${CONFIG_DIR:-./data/config}:/data/config
-  - ${BACKUP_DIR:-./data/backups}:/data/backups
 
 services:
   node:
@@ -18,6 +22,9 @@ services:
     container_name: monerotor
     command: ["run"]
     restart: unless-stopped
+    # monerod can take a while to flush LMDB on shutdown; don't let docker
+    # SIGKILL it mid-write (default grace is only 10s)
+    stop_grace_period: 2m
     read_only: true
     security_opt:
       - no-new-privileges:true
@@ -25,22 +32,30 @@ services:
     cap_add:                       # justified minimum:
       - NET_ADMIN                  #  load the nftables kill-switch
       - NET_RAW                    #  "
-      - SETUID                     #  drop PID1 -> tor/monero/admin
+      - SETUID                     #  drop PID1 -> tor/monero
       - SETGID                     #  "
       - CHOWN                      #  one-time ownership of the data volumes
     tmpfs:
       - /run:mode=0755
       - /tmp:mode=1777
     volumes: *vols
+    # in-container over loopback only (kill-switch allows lo); authenticates
+    # with the wizard's rpc_login. Healthy = RPC answers with a Height line.
+    healthcheck:
+      test: ["CMD", "sh", "-c", "mtor status | grep -q 'Height:'"]
+      interval: 60s
+      timeout: 30s
+      retries: 5
+      start_period: 5m
     # Intentionally NO 'ports:' — the host exposes nothing.
 
-  # Interactive setup / management (root + DAC to read Tor's key dir for backup).
-  # Not a long-running service; invoked on demand.
+  # Interactive first-run wizard. Not a long-running service; invoked once.
+  # CHOWN/SETUID/SETGID: hand the tor dirs to user tor and mint the onion.
   setup:
     build: .
     image: monerotor:latest
     profiles: ["setup"]
     command: ["setup"]
     cap_drop: ["ALL"]
-    cap_add: ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID"]
+    cap_add: ["CHOWN", "SETUID", "SETGID"]
     volumes: *vols

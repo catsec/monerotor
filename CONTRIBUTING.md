@@ -5,10 +5,11 @@ correctness beat features.
 
 ## Ground rules
 
-- **Preserve the security invariants** in `CLAUDE.md`. PRs that add a published
-  port, widen the capability set, persist the admin private key, or weaken the
-  kill-switch will be declined unless they come with a threat-model update and a
-  very good reason.
+- **Preserve the security invariants** in `DEVELOPMENT.md`. PRs that add a published
+  port, widen the capability set, add any remote-management path, reintroduce
+  backup/restore (or any code that unpacks operator-supplied files), or weaken
+  the kill-switch will be declined unless they come with a threat-model update
+  and a very good reason.
 - **POSIX sh only** in `bin/` (busybox ash target). `shellcheck -s sh bin/*` must
   pass. `hadolint Dockerfile` must pass.
 - Keep files small and commented with *why*, not *what*.
@@ -25,9 +26,9 @@ docker compose up -d          # run
 
 ## Before opening a PR
 
-- Run the **test checklist** in `CLAUDE.md`.
+- Run the **test checklist** in `DEVELOPMENT.md`.
 - Update `THREAT_MODEL.md` if you change the security posture.
-- Update `CLAUDE.md` invariants/roadmap if the design shifts.
+- Update `DEVELOPMENT.md` invariants/roadmap if the design shifts.
 
 ## Reporting security issues
 

@@ -1,0 +1,31 @@
+#!/usr/sbin/nft -f
+# monerotor kill-switch — security invariant 1: fail-closed egress.
+#
+# Only packets from sockets owned by user 'tor' may leave the container
+# (vanguards runs as user tor and talks only to tor's control socket anyway).
+# monerod never talks to the network directly: it is wrapped in torsocks
+# (loopback SOCKS) and binds loopback only. This is the kernel-level half of
+# the belt-and-suspenders pair with torsocks.
+#
+# Loaded by bin/supervise (nft -f) before any daemon starts; needs NET_ADMIN.
+# 'skuid "tor"' resolves the uid at load time from the container's /etc/passwd.
+
+flush ruleset
+
+table inet killswitch {
+    chain output {
+        type filter hook output priority 0; policy drop;
+
+        # loopback carries everything internal: SOCKS, RPC, onion targets
+        oif "lo" accept
+
+        # replies on flows conntrack already knows about
+        ct state established,related accept
+
+        # tor is the single process allowed to originate traffic
+        meta skuid "tor" accept
+
+        # anything else hits the drop policy; counter makes leaks visible
+        counter comment "dropped non-tor egress"
+    }
+}

@@ -1,9 +1,9 @@
-.PHONY: build setup up down logs status onion backup restore ps
+.PHONY: build setup up down logs status onion ps
 
 build:   ## build the image
 	docker compose build
 
-setup:   ## interactive first-run wizard / restore
+setup:   ## interactive first-run wizard (prints onion + user + password)
 	docker compose run --rm -it setup
 
 up:      ## start the node (headless)
@@ -15,17 +15,11 @@ down:    ## stop the node
 logs:    ## follow container logs
 	docker compose logs -f node
 
-status:  ## monerod sync status
-	docker compose run --rm -it setup mtor status
+status:  ## monerod sync status (runs in the node container — RPC is loopback-only)
+	docker exec monerotor mtor status
 
-onion:   ## print onion addresses + RPC login
-	docker compose run --rm -it setup mtor onion
-
-backup:  ## make an encrypted backup
-	docker compose run --rm -it setup mtor backup
-
-restore: ## restore from FILE=path/to/backup.age
-	docker compose run --rm -it setup mtor restore /data/config/$(notdir $(FILE))
+onion:   ## print onion address + RPC login
+	docker exec monerotor mtor onion
 
 ps:
 	docker compose ps
