@@ -51,8 +51,9 @@ Install Docker Engine + the compose plugin if you don't have them
 
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/catsec/monerotor/main/deploy/monerotor-setup.sh
-less monerotor-setup.sh            # read it first — it's a security tool
-sh monerotor-setup.sh
+less monerotor-setup.sh            # read it first — it is a security tool
+chmod +x monerotor-setup.sh
+./monerotor-setup.sh
 ```
 
 If your user isn't in the `docker` group, run the script with `sudo` (the data
@@ -67,8 +68,9 @@ and start it, then:
 
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/catsec/monerotor/main/deploy/monerotor-setup.sh
-less monerotor-setup.sh            # read it first — it's a security tool
-sh monerotor-setup.sh
+less monerotor-setup.sh            # read it first — it is a security tool
+chmod +x monerotor-setup.sh
+./monerotor-setup.sh
 ```
 
 Keep the blockchain on the internal SSD; an external/network drive will make
@@ -95,27 +97,55 @@ containers** (default).
 
 ### Manual install (any platform)
 
-If you'd rather not run a script, do exactly what it does:
-
-```sh
-mkdir -p ~/monerotor && cd ~/monerotor
-curl -fsSLO https://raw.githubusercontent.com/catsec/monerotor/main/docker-compose.yml
-docker compose pull                    # or: docker compose build
-docker compose run --rm -it setup      # wizard — SAVE what it prints
-docker compose up -d
-```
-
-The shipped `docker-compose.yml` builds from source by default. To use the
-pre-built image instead, replace the two `build: .` lines with
-`image: ghcr.io/catsec/monerotor:latest`, or just clone the repo and build:
+If you'd rather not run a script, either **build from source**:
 
 ```sh
 git clone https://github.com/catsec/monerotor && cd monerotor
 docker compose build
+docker compose run --rm -it setup      # wizard — SAVE what it prints
+docker compose up -d
 ```
 
-Data lands in `./data/*`. To put the blockchain elsewhere:
-`MONERO_DIR=/big/disk/monero docker compose up -d`.
+…or use the **published image** with a compose file of your own. The repo's
+`docker-compose.yml` builds from source (`build: .`), so for an image-based
+install write this instead:
+
+```yaml
+# docker-compose.yml — pre-built image, no source checkout needed
+services:
+  node:
+    image: ghcr.io/catsec/monerotor:latest
+    container_name: monerotor
+    command: ["run"]
+    restart: unless-stopped
+    read_only: true
+    security_opt: [ "no-new-privileges:true" ]
+    cap_drop: ["ALL"]
+    cap_add: ["NET_ADMIN", "NET_RAW", "SETUID", "SETGID", "CHOWN"]
+    stop_grace_period: 2m
+    tmpfs: [ "/run:mode=0755", "/tmp:mode=1777" ]
+    volumes:
+      - ./data/monero:/data/monero      # point this at your big disk
+      - ./data/tor:/data/tor
+      - ./data/config:/data/config
+    # Intentionally NO 'ports:' — the host exposes nothing.
+
+  setup:
+    image: ghcr.io/catsec/monerotor:latest
+    profiles: ["setup"]
+    command: ["setup"]
+    cap_drop: ["ALL"]
+    cap_add: ["CHOWN", "SETUID", "SETGID"]
+    volumes:
+      - ./data/monero:/data/monero
+      - ./data/tor:/data/tor
+      - ./data/config:/data/config
+```
+
+then `docker compose pull && docker compose run --rm -it setup && docker compose up -d`.
+
+With the repo's own compose file, data lands in `./data/*`; to put the
+blockchain elsewhere: `MONERO_DIR=/big/disk/monero docker compose up -d`.
 
 ## Using it
 
