@@ -26,14 +26,45 @@ ask()  { # ask "prompt" "default" -> REPLY
 command -v docker >/dev/null 2>&1 \
     || die "docker not found. Install Docker Desktop (mac) or docker-ce (linux) first:
        https://docs.docker.com/get-docker/"
-docker info >/dev/null 2>&1 \
-    || die "the docker daemon is not running (start Docker Desktop / dockerd)."
+# "can't reach the daemon" has two very different causes and one useless
+# error message; tell them apart, because the fixes are unrelated.
+if ! docker info >/dev/null 2>&1; then
+    # `docker info` prints the whole client block even when the server is
+    # unreachable; keep only the lines that say what actually went wrong.
+    # `docker info` prints the whole client block even when the server is
+    # unreachable; keep only what follows "Server:", which is the real error.
+    err="$(docker info 2>&1 | sed -n '/^Server:/,$p' | grep -v '^Server:' | head -3 || true)"
+    [ -n "$err" ] || err="$(docker info 2>&1 | tail -2)"
+    case "$err" in
+        *"permission denied"*)
+            die "cannot talk to the docker daemon: permission denied on its socket.
+       Your user is not in the 'docker' group (or the group hasn't taken
+       effect in this shell yet):
+
+           sudo usermod -aG docker \"\$USER\"
+           newgrp docker          # or log out and back in, then re-run
+
+       Do NOT re-run this installer with sudo: \$HOME would become /root and
+       the node would be installed there instead of in your home folder." ;;
+        *)
+            die "cannot reach the docker daemon. Start it, then re-run:
+           Linux:           sudo systemctl start docker
+           macOS/Windows:   start Docker Desktop
+
+       docker said:
+       ${err}" ;;
+    esac
+fi
 if docker compose version >/dev/null 2>&1; then
     compose() { docker compose "$@"; }
 elif command -v docker-compose >/dev/null 2>&1; then
     compose() { docker-compose "$@"; }
 else
-    die "docker compose v2 not found (comes with Docker Desktop; on linux install the docker-compose-plugin package)."
+    die "docker compose not found.
+       Debian/Ubuntu:  sudo apt-get install -y docker-compose-plugin
+       (if that package is missing, add Docker's official repo first:
+        https://docs.docker.com/engine/install/debian/)
+       macOS/Windows:  it ships with Docker Desktop."
 fi
 
 hr
