@@ -1,0 +1,17 @@
+# monerotor Tor config.
+# Two independent hidden services (separate onions), SOCKS on loopback for
+# torsocks-wrapped monerod. Tor runs as user 'tor' (the only user allowed to
+# egress by the kill-switch). Onion keys live on the persistent /data/tor volume.
+
+DataDirectory /data/tor/data
+SocksPort 127.0.0.1:9050
+
+# --- Monero restricted RPC (point your wallet at this onion) ---
+HiddenServiceDir /data/tor/monero-rpc
+HiddenServiceVersion 3
+HiddenServicePort 18081 127.0.0.1:18081
+
+# --- SSH management (a DIFFERENT onion) ---
+HiddenServiceDir /data/tor/ssh
+HiddenServiceVersion 3
+HiddenServicePort 22 127.0.0.1:2222

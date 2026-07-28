@@ -1,0 +1,46 @@
+# monerotor — one hardened container. No published ports; reachable only via Tor.
+#
+#   1. configure:  docker compose run --rm -it setup
+#   2. run:        docker compose up -d
+#   3. manage:     docker compose run --rm -it setup mtor <backup|restore|set …>
+#                  (live status/onion over the SSH onion: ssh -p 22 admin@<onion>)
+
+x-volumes: &vols
+  - ${MONERO_DIR:-./data/monero}:/data/monero
+  - ${TOR_DIR:-./data/tor}:/data/tor
+  - ${CONFIG_DIR:-./data/config}:/data/config
+  - ${BACKUP_DIR:-./data/backups}:/data/backups
+
+services:
+  node:
+    build: .
+    image: monerotor:latest
+    container_name: monerotor
+    command: ["run"]
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+    cap_add:                       # justified minimum:
+      - NET_ADMIN                  #  load the nftables kill-switch
+      - NET_RAW                    #  "
+      - SETUID                     #  drop PID1 -> tor/monero/admin
+      - SETGID                     #  "
+      - CHOWN                      #  one-time ownership of the data volumes
+    tmpfs:
+      - /run:mode=0755
+      - /tmp:mode=1777
+    volumes: *vols
+    # Intentionally NO 'ports:' — the host exposes nothing.
+
+  # Interactive setup / management (root + DAC to read Tor's key dir for backup).
+  # Not a long-running service; invoked on demand.
+  setup:
+    build: .
+    image: monerotor:latest
+    profiles: ["setup"]
+    command: ["setup"]
+    cap_drop: ["ALL"]
+    cap_add: ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID"]
+    volumes: *vols

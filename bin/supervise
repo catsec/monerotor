@@ -1,0 +1,73 @@
+#!/bin/sh
+# monerotor node runtime (root PID1, minimal caps).
+# Applies the kill-switch, then runs tor + dropbear + monerod as non-root users.
+# If any long-running service dies, tears down so Docker restarts the container.
+set -eu
+
+CFG=/data/config; TOR=/data/tor; MON=/data/monero
+log() { printf '[monerotor] %s\n' "$*"; }
+
+term() {
+    log "shutting down"
+    kill "${tor_pid:-}" "${ssh_pid:-}" "${mon_pid:-}" 2>/dev/null || true
+    wait 2>/dev/null || true
+    exit 0
+}
+trap term TERM INT
+
+# --- volume layout + ownership (CAP_CHOWN) ---
+mkdir -p "$MON" "$TOR/data" "$TOR/monero-rpc" "$TOR/ssh" "$CFG/ssh" "$CFG/home/.ssh" /data/backups
+chown -R monero:monero "$MON"
+chown -R tor:tor "$TOR"; chmod 700 "$TOR" "$TOR/monero-rpc" "$TOR/ssh"
+chown -R admin:admin "$CFG/home"
+
+[ -f "$CFG/monerod.conf" ] || { log "no /data/config/monerod.conf — run: docker compose run --rm -it setup"; exit 1; }
+
+# --- kill-switch (CAP_NET_ADMIN): only user 'tor' may egress ---
+log "applying Tor-only kill-switch"
+nft -f /etc/nftables/killswitch.nft
+
+# --- tor: publishes the two onions ---
+log "starting tor"
+su-exec tor tor -f /etc/tor/torrc >/dev/null 2>&1 &
+tor_pid=$!
+
+log "waiting for onions..."
+i=0
+while [ "$i" -lt 90 ]; do
+    if su-exec tor sh -c 'test -s /data/tor/monero-rpc/hostname && test -s /data/tor/ssh/hostname'; then break; fi
+    i=$((i+1)); sleep 1
+done
+rpc_onion="$(su-exec tor cat "$TOR/monero-rpc/hostname" 2>/dev/null || echo '?')"
+ssh_onion="$(su-exec tor cat "$TOR/ssh/hostname" 2>/dev/null || echo '?')"
+{ echo "monero-rpc: ${rpc_onion}:18081"; echo "ssh:        ${ssh_onion}:22"; } > "$CFG/onions.txt"
+
+# --- blockchain presence (time saver) ---
+if [ -s "$MON/lmdb/data.mdb" ] || [ -s "$MON/data.mdb" ]; then
+    log "existing blockchain found in /data/monero — resuming (monerod verifies it)"
+else
+    log "no blockchain in /data/monero — will sync from scratch over Tor (slow)."
+    log "  Tip: copy a synced pruned data.mdb into that folder to skip the sync."
+fi
+
+# --- dropbear: rootless, key-only, loopback:2222, forwarding disabled ---
+log "starting sshd (dropbear)"
+su-exec admin dropbear -F -E -s -g -j -k -p 127.0.0.1:2222 \
+    -r "$CFG/ssh/host_ed25519" -P /tmp/dropbear.pid &
+ssh_pid=$!
+
+# --- monerod: torsocks routes EVERY connection through Tor ---
+log "starting monerod (Tor-only)"
+su-exec monero torsocks monerod --config-file "$CFG/monerod.conf" --non-interactive >/dev/null 2>&1 &
+mon_pid=$!
+
+log "up."
+log "  monero RPC onion : ${rpc_onion}:18081"
+log "  ssh onion        : ${ssh_onion}:22"
+
+# --- supervise: if any service exits, restart the container ---
+while kill -0 "$tor_pid" 2>/dev/null && kill -0 "$ssh_pid" 2>/dev/null && kill -0 "$mon_pid" 2>/dev/null; do
+    sleep 5
+done
+log "a service exited; stopping so Docker can restart"
+term

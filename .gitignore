@@ -1,0 +1,8 @@
+# runtime state — never commit
+data/
+*.age
+.env
+
+# editor / os
+*.swp
+.DS_Store

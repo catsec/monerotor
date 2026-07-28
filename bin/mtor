@@ -1,0 +1,174 @@
+#!/bin/sh
+# mtor — monerotor management CLI.
+#
+#   setup            interactive wizard, or restore if a backup is found
+#   status           monerod sync status (restricted RPC, loopback)
+#   onion            print the RPC + SSH onions and the RPC login
+#   set <key> <val>  change a monerod.conf value, then offer a fresh backup
+#   backup [file]    passphrase-encrypted backup of identity + config
+#   restore <file>   restore identity + config from an encrypted backup
+#   logs [n]         tail the monerod log
+#
+# The backup NEVER contains the blockchain (copy /data/monero separately) and
+# NEVER contains your admin SSH private key (that is shown once and only kept
+# by you).
+set -eu
+
+CFG=/data/config; TOR=/data/tor; MON=/data/monero; BK=/data/backups
+CONF="$CFG/monerod.conf"; DEF=/etc/monerod.conf.default; MARKER="$CFG/.configured"
+
+log() { printf '%s\n' "$*"; }
+hr()  { printf -- '----------------------------------------------------------------------\n'; }
+need_tty() { [ -t 0 ] || { echo "this needs an interactive terminal: docker compose run --rm -it setup"; exit 1; }; }
+
+# Briefly run tor to mint the onion addresses so we can show them at setup time.
+mint_onions() {
+    mkdir -p "$TOR/data" "$TOR/monero-rpc" "$TOR/ssh"
+    chown -R tor:tor "$TOR"; chmod 700 "$TOR" "$TOR/monero-rpc" "$TOR/ssh"
+    if ! su-exec tor sh -c 'test -s /data/tor/monero-rpc/hostname && test -s /data/tor/ssh/hostname'; then
+        su-exec tor tor -f /etc/tor/torrc >/dev/null 2>&1 &
+        tp=$!
+        n=0; while [ "$n" -lt 30 ]; do
+            su-exec tor sh -c 'test -s /data/tor/monero-rpc/hostname && test -s /data/tor/ssh/hostname' && break
+            n=$((n+1)); sleep 1
+        done
+        kill "$tp" 2>/dev/null || true; wait "$tp" 2>/dev/null || true
+    fi
+}
+
+make_backup() {
+    need_tty
+    mkdir -p "$BK"
+    out="${1:-}"
+    [ -n "$out" ] || out="$BK/monerotor-$(date +%Y%m%d-%H%M%S 2>/dev/null || echo backup).age"
+    tmp="$(mktemp)"
+    # identity + config ONLY — no blockchain, no admin private key
+    tar czf "$tmp" -C / \
+        data/tor/monero-rpc data/tor/ssh \
+        data/config/monerod.conf data/config/rpc_login \
+        data/config/ssh/host_ed25519 data/config/home/.ssh/authorized_keys 2>/dev/null || true
+    echo "Set a passphrase to encrypt this backup (you will need it to restore):"
+    age -p -o "$out" "$tmp"
+    rm -f "$tmp"
+    hr
+    log "Backup written: $out"
+    log "Contains: onion identities, monerod.conf, RPC login, SSH host key + your"
+    log "authorized public key. With this file + the passphrase you can move to"
+    log "new hardware and keep the SAME onion addresses."
+    hr
+}
+
+do_restore() {
+    need_tty
+    in="$1"; [ -f "$in" ] || { echo "no such backup: $in"; exit 1; }
+    tmp="$(mktemp)"
+    echo "Enter the backup passphrase:"
+    age -d -o "$tmp" "$in"
+    tar xzf "$tmp" -C /
+    rm -f "$tmp"
+    chown -R tor:tor "$TOR" 2>/dev/null || true; chmod 700 "$TOR" "$TOR/monero-rpc" "$TOR/ssh" 2>/dev/null || true
+    chown -R admin:admin "$CFG/home" 2>/dev/null || true
+    touch "$MARKER"
+    hr
+    log "Restored. Your onion addresses and config are back."
+    log "Use the SSH PRIVATE KEY you saved at first setup to log in — it still works."
+    log "Start the node with:  docker compose up -d"
+    hr
+}
+
+wizard() {
+    need_tty
+    hr; log "monerotor setup wizard"; hr
+
+    printf 'Node type — [P]runed (~100GB, recommended) or [F]ull (~220GB+)? [P] '
+    read t || true
+    case "${t:-P}" in [Ff]*) prune=0 ;; *) prune=1 ;; esac
+
+    printf 'RPC login — [A]uto-generate (recommended) or [C]ustom? [A] '
+    read r || true
+    case "${r:-A}" in
+        [Cc]*) printf '  RPC username: '; read ruser; printf '  RPC password: '; read rpass ;;
+        *)     ruser=cake; rpass="$(openssl rand -hex 16)" ;;
+    esac
+
+    # effective config
+    cp "$DEF" "$CONF"
+    if grep -q '^prune-blockchain=' "$CONF"; then
+        sed -i "s/^prune-blockchain=.*/prune-blockchain=${prune}/" "$CONF"
+    else
+        echo "prune-blockchain=${prune}" >> "$CONF"
+    fi
+    echo "rpc-login=${ruser}:${rpass}" >> "$CONF"
+    printf '%s:%s\n' "$ruser" "$rpass" > "$CFG/rpc_login"; chmod 600 "$CFG/rpc_login"
+
+    # persistent dropbear host key (stable server identity)
+    mkdir -p "$CFG/ssh" "$CFG/home/.ssh"
+    [ -f "$CFG/ssh/host_ed25519" ] || dropbearkey -t ed25519 -f "$CFG/ssh/host_ed25519" >/dev/null 2>&1
+
+    # NEW admin keypair every setup; keep only the PUBLIC key on the node
+    tmpk="$(mktemp -u)"
+    ssh-keygen -t ed25519 -N '' -C monerotor-admin -f "$tmpk" >/dev/null
+    cat "${tmpk}.pub" > "$CFG/home/.ssh/authorized_keys"
+    chmod 700 "$CFG/home/.ssh"; chmod 600 "$CFG/home/.ssh/authorized_keys"
+    chown -R admin:admin "$CFG/home"
+
+    mint_onions
+    ssh_onion="$(su-exec tor cat "$TOR/ssh/hostname" 2>/dev/null || echo '?')"
+    rpc_onion="$(su-exec tor cat "$TOR/monero-rpc/hostname" 2>/dev/null || echo '?')"
+    { echo "monero-rpc: ${rpc_onion}:18081"; echo "ssh:        ${ssh_onion}:22"; } > "$CFG/onions.txt"
+
+    touch "$MARKER"
+
+    printf '\n'; hr
+    log "!!  SAVE THESE NOW  —  LOSE THEM AND YOU LOSE CONTROL OF THE NODE  !!"
+    hr
+    log "SSH management (over Tor):   ssh -p 22 admin@${ssh_onion}"
+    log "Monero RPC onion (Cake):     ${rpc_onion}:18081"
+    log "RPC login:                   ${ruser}:${rpass}"
+    hr
+    log "ADMIN PRIVATE KEY  —  copy this to your SSH client. It is NOT stored on"
+    log "the node and NOT in the backup. If you lose it, you lose management access."
+    hr
+    cat "$tmpk"
+    hr
+    # the private key never touches the persistent disk; wipe the temp copy
+    shred -u "$tmpk" "${tmpk}.pub" 2>/dev/null || rm -f "$tmpk" "${tmpk}.pub"
+
+    log "Now make your first backup (onion identity + config)."
+    make_backup
+    log "Setup complete. Start the node with:  docker compose up -d"
+}
+
+setup() {
+    need_tty
+    if [ -f "$MARKER" ]; then
+        log "Already configured. Use 'mtor set', 'mtor backup', or delete /data/config to start over."
+        exit 0
+    fi
+    bkp="$(ls -1 "$CFG"/*.age 2>/dev/null | head -1 || true)"
+    if [ -n "$bkp" ]; then
+        printf 'A backup was found in the config folder:\n  %s\nRestore from it? [Y/n] ' "$bkp"
+        read a || true
+        case "${a:-Y}" in [Nn]*) : ;; *) do_restore "$bkp"; return 0 ;; esac
+    fi
+    wizard
+}
+
+case "${1:-}" in
+    setup)   setup ;;
+    status)  monerod status --rpc-bind-port 18081 2>/dev/null || echo "RPC not ready yet" ;;
+    onion)   cat "$CFG/onions.txt" 2>/dev/null || echo "onions not generated yet"
+             echo "rpc-login: $(cat "$CFG/rpc_login" 2>/dev/null || echo '?')" ;;
+    logs)    tail -n "${2:-100}" "$MON/monerod.log" 2>/dev/null || echo "no log yet" ;;
+    set)     key="${2:?usage: mtor set <key> <value>}"; val="${3:?usage: mtor set <key> <value>}"
+             sed -i "/^${key}=/d" "$CONF"; printf '%s=%s\n' "$key" "$val" >> "$CONF"
+             log "set ${key}=${val}  (restart the node to apply)"
+             if [ -t 0 ]; then
+                 printf 'Configuration changed — create an updated backup now? [Y/n] '
+                 read a || true
+                 case "${a:-Y}" in [Nn]*) : ;; *) make_backup ;; esac
+             fi ;;
+    backup)  make_backup "${2:-}" ;;
+    restore) do_restore "${2:?usage: mtor restore <file>}" ;;
+    *)       echo "usage: mtor {setup|status|onion|logs|set <k> <v>|backup [file]|restore <file>}"; exit 1 ;;
+esac

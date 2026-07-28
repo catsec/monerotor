@@ -1,0 +1,30 @@
+#!/bin/sh
+# monerotor entrypoint (PID1 target under tini). Dispatches by mode:
+#   run    -> start the node (refuses if unconfigured)
+#   setup  -> interactive wizard / restore
+#   mtor … -> run a management subcommand
+set -eu
+
+MARKER=/data/config/.configured
+
+case "${1:-run}" in
+    run)
+        if [ ! -f "$MARKER" ]; then
+            echo "monerotor: not configured yet." >&2
+            echo "Run the interactive setup first:" >&2
+            echo "    docker compose run --rm -it setup" >&2
+            exit 1
+        fi
+        exec /usr/local/bin/supervise
+        ;;
+    setup)
+        exec /usr/local/bin/mtor setup
+        ;;
+    mtor)
+        shift
+        exec /usr/local/bin/mtor "$@"
+        ;;
+    *)
+        exec "$@"
+        ;;
+esac
