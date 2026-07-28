@@ -6,11 +6,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Pinned image, not apt's shellcheck: the runner's version drifts and then
+      # CI flags things a local run didn't. Keep this in sync with the commands
+      # in DEVELOPMENT.md so "lint what CI lints" is literally true.
       - name: shellcheck (POSIX sh)
         run: |
-          sudo apt-get update -y && sudo apt-get install -y shellcheck
-          shellcheck -s sh bin/entrypoint bin/supervise bin/mtor
-          shellcheck -s bash deploy/monerotor-setup.sh
+          docker run --rm -v "$PWD:/mnt:ro" koalaman/shellcheck:v0.10.0 \
+            -s sh /mnt/bin/entrypoint /mnt/bin/supervise /mnt/bin/mtor
+          docker run --rm -v "$PWD:/mnt:ro" koalaman/shellcheck:v0.10.0 \
+            -s bash /mnt/deploy/monerotor-setup.sh
       - name: hadolint
         uses: hadolint/hadolint-action@v3.1.0
         with:

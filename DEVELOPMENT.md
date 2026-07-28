@@ -124,10 +124,15 @@ docker exec monerotor mtor status     # status needs the node's loopback
 
 Lint exactly what CI lints:
 
+Use the pinned images — a locally-installed shellcheck may be a different
+version than CI and will disagree with it:
+
 ```sh
-shellcheck -s sh bin/entrypoint bin/supervise bin/mtor
-shellcheck -s bash deploy/monerotor-setup.sh
-hadolint Dockerfile
+docker run --rm -v "$PWD:/mnt:ro" koalaman/shellcheck:v0.10.0 \
+    -s sh /mnt/bin/entrypoint /mnt/bin/supervise /mnt/bin/mtor
+docker run --rm -v "$PWD:/mnt:ro" koalaman/shellcheck:v0.10.0 \
+    -s bash /mnt/deploy/monerotor-setup.sh
+docker run --rm -i hadolint/hadolint < Dockerfile
 ```
 
 **There is no test suite** — `.github/workflows/ci.yml` runs shellcheck, hadolint,

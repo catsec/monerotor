@@ -29,8 +29,12 @@ term() {
             su-exec monero kill -9 "$mon_pid" 2>/dev/null || true
         fi
     fi
-    [ -n "${vg_pid:-}" ]  && su-exec tor kill "$vg_pid"  2>/dev/null || true
-    [ -n "${tor_pid:-}" ] && su-exec tor kill "$tor_pid" 2>/dev/null || true
+    if [ -n "${vg_pid:-}" ]; then
+        su-exec tor kill "$vg_pid" 2>/dev/null || true
+    fi
+    if [ -n "${tor_pid:-}" ]; then
+        su-exec tor kill "$tor_pid" 2>/dev/null || true
+    fi
     wait 2>/dev/null || true
     exit 0
 }
