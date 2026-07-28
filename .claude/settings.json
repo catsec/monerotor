@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(sudo -n true)"
+      "Bash(sudo -n true)",
+      "Bash(expect /private/tmp/claude-501/-Users-ram-dev-monerotor/a62bbcb3-50e4-416b-b85a-275dc176d91a/scratchpad/run-hostowned.exp)"
     ]
   }
 }

@@ -41,8 +41,26 @@ mint_onion() {
     fi
 }
 
+# Bind-mounted host directories arrive owned by the host user (uid 1000 &c).
+# Container root has no CAP_DAC_OVERRIDE — that is the point of the minimal cap
+# set — so it cannot write into them until it owns them. CAP_CHOWN lets us
+# claim the mount point; without this the wizard dies on the first write.
+# (Named volumes start root-owned, which is why this only bites bind mounts.)
+# NB: do not guard this with `[ -w "$CFG" ]` — access(2) ignores file modes for
+# uid 0, so the test reports "writable" and the chown gets skipped, and then the
+# first real write fails anyway. Claim unconditionally, then prove it by writing.
+claim_config() {
+    chown root:root "$CFG" 2>/dev/null || true
+    if ! : > "$CFG/.wtest" 2>/dev/null; then
+        echo "cannot write to /data/config — check the volume mount and its ownership"
+        exit 1
+    fi
+    rm -f "$CFG/.wtest"
+}
+
 wizard() {
     need_tty
+    claim_config
     if [ -f "$MARKER" ]; then
         log "Already configured. To start over: stop the node, delete the data"
         log "folders, run setup again (new onion + new password — new day)."

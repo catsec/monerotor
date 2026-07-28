@@ -47,6 +47,13 @@ trap term TERM INT
 # 755 parents, allowed); everything inside tor's dirs runs AS tor (su-exec).
 # Mac bind mounts don't enforce any of this — only enforcing-fs tests catch it.
 mkdir -p /run/tor
+# Bind mounts arrive owned by the host user and container root has no
+# CAP_DAC_OVERRIDE, so claim each mount point with CAP_CHOWN before writing
+# (supervise writes onions.txt into $CFG). Named volumes start root-owned;
+# only bind mounts need this.
+# unconditional: `[ -w ]` reports true for root regardless of mode, so testing
+# first would skip the chown and the write would fail later
+chown root:root "$CFG"
 chown tor:tor "$TOR" /run/tor
 # -R fixes files a user copied in as root (e.g. a synced chain); tolerate
 # EACCES on interiors root can't traverse — the owners in there are already right
